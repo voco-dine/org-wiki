@@ -8,100 +8,48 @@
 
 ---
 
-## Architecure Justifications
+## Call flow
 
-### Adapter Layer (Ports & Adapters Pattern)
+Caller → Twilio (Telephony) → Deepgram (Streaming STT) → LangGraph Agent → ElevenLabs/PlayHT (Streaming TTS) → Caller
+                                                                  ↓
+                                               Redis (Menu Read Cache) ← NeonDB (Source of Truth)
+                                                                  ↓
+                                               POS Integration (Structured JSON, direct API)
+                                                                  ↓
+                                               Twilio SMS/WhatsApp (Order Confirmation + Feedback)
 
-- Decouples restaurant-specific data formats from core agent logic — adding a new restaurant means writing an adapter, not modifying the agent
-- Enables two integration modes: push (restaurant hits our API) and pull (we poll their API), covering both tech-savvy and legacy restaurants
-- Isolates schema mapping failures from conversation flow — a broken adapter doesn't crash a live call
-- Follows Hexagonal Architecture, a well-established pattern for systems that integrate with multiple external sources
-- Foundation for white-label: the adapter is the boundary between "our product" and "their system"
+## Langgraph State Graph
 
-### RDS (PostgreSQL/NeonDB) as Knowledge Base
+    Greeting → Intent Detection → Item Selection → Modifier Handling → Disambiguation → Upselling → Order Confirmation → Human Handoff (fallback)
 
-- Single source of truth for normalized menu data across all restaurants — items, categories, modifiers, valid combinations, prices
-- Relational model naturally enforces modifier constraints (e.g., "gluten-free crust only available on small/medium") which is hard to represent in key-value or document stores
-- Supports structured queries the LLM needs: "what modifiers are valid for this item?" is a simple JOIN, not a semantic search problem
-- Enables analytics queries directly against the same database — no separate data pipeline needed
-- Cross Deployment persistence, crash persistence
-- NeonDB specifically: serverless PostgreSQL with branching, minimal ops overhead for an FYP
+Each node has defined transitions, guards, and its own context injection strategy. The graph supports cycle-back (e.g. "actually, change the first item") via LangGraph's checkpointing and state rollback.
 
-### In-Memory Cache (Redis or Application-Level)
+## Data Layer
 
-- Eliminates database round-trips during live conversation — menu data loaded once at call start, valid for call duration (3-5 min typical call won't see menu changes)
-- Sub-millisecond reads vs. 5-20ms for a database query — critical when you have a sub-1-second latency budget and every hop counts
-- Call-scoped caching is simpler than TTL-based caching — no stale data concerns because the cache lifecycle matches the conversation lifecycle
-- Availability check at confirmation time (single RDS hit) catches any changes that occurred during the call without constant polling
-- Keeps the hot path entirely in memory: ASR → LLM (with cached menu in context) → TTS, no network hops for menu resolution
+NeonDB (PostgreSQL) is the source of truth for all persistent data: menu structure, item modifiers, prices, call logs, order history, and analytics.
 
-### Tiered Menu Context Injection (Instead of Vector DB in Critical Path)
+Redis sits on top as a read cache for live conversations. Menu data is loaded into Redis at call start and kept warm via the adapter sync. All reads during a conversation hit Redis for sub-millisecond latency. On a cache miss or Redis failure, the system falls back to NeonDB directly.
 
-- **Tier 1 (compact menu, always in system prompt):** Keeps full menu awareness under 400 tokens even for large menus. Leverages LLM provider prompt caching — tokens paid once per conversation, not per turn
-- **Tier 2 (category-scoped detail, injected per LangGraph node):** Only loads full details for the active category, reducing irrelevant context that could confuse the LLM or waste tokens
-- **Tier 3 (item-level detail, loaded via tool call):** Modifiers, allergens, descriptions fetched on demand — microsecond cache lookup, no embedding overhead
-- Avoids 200-400ms vector retrieval hop on every turn that a mandatory vector DB would add
-- Scales with conversation complexity, not menu size — simple order touches 300 tokens of menu data, complex browsing order touches 600-800, neither is expensive
-- The LLM handles fuzzy matching ("chicken parmejan" → "chicken parmigiana") natively in context for typical menu sizes (30-80 items) without needing embedding similarity
+See ADR-004 for the full rationale and TTL strategy.
 
-### No Vector DB in Critical Path (Conditional Fallback Only)
+## Menu Context Strategy
 
-- For typical restaurant menus (30-150 items), the LLM resolves items directly from compact context faster and more accurately than a retrieval hop
-- Adding a mandatory vector search adds latency without proportional accuracy gains — real order-takers respond instantly, not after a "let me check" pause
-- Kept as an optional fallback: if the LLM can't confidently match an item (vague queries like "something light"), it can call a semantic search tool — the delay is justified and natural in that context
-- Avoids the operational complexity of keeping embeddings in sync with menu changes (re-embedding on every menu update)
-- Evaluated and rejected unnecessary complexity with clear reasoning, rather than adding layers for sophistication
+Menu data is injected into the LLM context in three tiers to keep token usage low and latency fast.
 
-### Direct API for Order Placement (No Cache/RDS in Write Path)
+### Tier 1 — Compact Menu (Always in System Prompt)¶
 
-- Orders hit the restaurant's POS/API directly — no intermediate write layer that could create consistency issues
-- A confirmed order must be immediately reflected in the restaurant's system, not queued through a sync cycle
-- Keeps the adapter layer read-heavy (menu/availability) and write-light (just order submission), which is simpler to reason about and maintain
-- Failure handling is clear: if the POS rejects the order, the agent knows immediately and can inform the customer, rather than discovering the failure asynchronously
-
----
-
-## Further Details
-
-### 1. Menu Context Engineering
-
-#### Tiered Representation
-
-Most restaurants send menus as verbose JSON with descriptions, allergens, nested modifiers, etc. You don't need all of that in every turn. Create a **tiered schema:**
-
-**Tier 1 (always in context, ~200-400 tokens even for large menus):** Item names, categories, and prices only. Flat, compact. This is what the LLM needs 95% of the time.
+Item names, categories, and prices only — typically 200–400 tokens even for large menus. Placed in the system prompt so it is cached by the LLM provider after the first turn and not re-paid on every exchange.
 
     PIZZA: Margherita 12, Pepperoni 14, BBQ Chicken 15
     SIDES: Garlic Bread 5, Wings(6pc) 8, Fries 4
     DRINKS: Coke/Sprite/Fanta 3, Water 2
 
-**Tier 2 (loaded on demand via tool call):** When the customer asks about modifiers, allergens, or descriptions ("what's on the BBQ chicken?", "can I get gluten-free crust?"), the LLM calls a `get_item_details(item_id)` tool that returns the full item object from cache. Only the relevant item's detail enters context, not the entire modifier tree for every item.
+### Tier 2 — Category Detail (Injected per LangGraph Node)¶
 
-This is essentially the same idea as vector DB retrieval but without the embedding overhead — it's a simple keyed lookup that returns in microseconds from cache.
+When the conversation narrows to a category (e.g. customer says "I want a pizza"), the active LangGraph node injects full details for that category only — sizes, crusts, toppings. The rest of the menu stays out of context.
 
-#### Category-Scoped Context
+### Tier 3 — Item Detail (On-Demand Tool Call)¶
 
-Load only the relevant menu category into context based on conversation state. Customer says "I want a pizza" — your LangGraph node transitions to the pizza ordering state and injects only the pizza category with full details (items, sizes, crusts, toppings). The rest of the menu stays out of context until needed.
+When a customer asks about modifiers, allergens, or descriptions, the LLM calls get_item_details(item_id). Only the requested item's data enters context — a direct Redis lookup with no embedding overhead.
 
-This maps naturally to how LangGraph works: each node can have its own context injection strategy. The greeting node has Tier 1 (full menu, compact). The pizza ordering node has full pizza details only. The drinks node has full drinks details only.
-
-#### System Prompt vs. Conversation History
-
-Here's a subtle but high-impact optimization: the menu belongs in the **system prompt**, not in conversation messages. Most LLM providers cache system prompts across turns (OpenAI's prompt caching, Anthropic's prompt caching). So a 500-token menu in the system prompt is effectively free after the first turn — you're not re-paying for those tokens on every exchange. But if the menu is in a user message, you pay for it every turn as the conversation history grows.
-
-With this approach, even a large menu costs tokens only once per conversation, not per turn.
-
-#### Recommendation from Opus
-
-Combine approaches 1, 2, and 3:
-
-- System prompt contains Tier 1 compact menu (always cached after first turn, minimal tokens)
-- LangGraph nodes inject category-specific details when the conversation narrows to a category
-- `get_item_details` tool provides full modifier/allergen/description data on demand
-- Availability checked against cache at confirmation time
-
-This gives you a strong optimization story without the vector DB latency penalty. The token usage scales with conversation complexity, not menu size. A customer ordering one pizza hits maybe 300 tokens of menu data total. A customer browsing the whole menu and asking questions might hit 600-800. Neither is expensive.
-
-This is essentially implementing a form of **retrieval-augmented generation without embeddings**, using structured domain knowledge and conversation state to determine what context the LLM needs at each stage. That's a defensible architectural contribution.
-
----
+See ADR-002 for why a vector DB was not placed in the critical path.

@@ -83,5 +83,15 @@ nav:
   - Home: index.md
   - System Specification:
       - Architecture: system-specification/architecture.md
+      - Tech Stack: system-specification/tech-stack.md
       - Audio Pipe: system-specification/audio-pipe/audio-pipe.md
       - Analytics: system-specification/analytics/analytics.md
+  - Decisions:
+      - Overview: decisions/index.md
+      - ADR-001 LangGraph over Platforms: decisions/001-langgraph-over-platforms.md
+      - ADR-002 Tiered Menu Context: decisions/002-tiered-menu-context.md
+      - ADR-003 Adapter Layer: decisions/003-adapter-layer.md
+      - ADR-004 Redis Menu Cache: decisions/004-redis-menu-cache.md
+      - ADR-005 WhatsApp Feedback: decisions/005-whatsapp-sms-feedback.md
+  - Scope: scope.md
+  - Evaluation: evaluation.md
