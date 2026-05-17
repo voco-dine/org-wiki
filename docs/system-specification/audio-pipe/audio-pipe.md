@@ -2,11 +2,11 @@
 
     Browser (React/JS LiveKit SDK)
             ↕ WebRTC
-    LiveKit Cloud/Server  ←→    Agent Process
+    LiveKit Cloud/Server  ←→    Agent Process (LiveKit Agents SDK)
                                         ↕
-                                LangGraph core
+                            Agent / AgentSession / @function_tool
                                         ↕
-                            Order DB / Menu data
+                            backend-services (menu, orders, events)
 
 ---
 
@@ -28,7 +28,7 @@ A `MultilingualModel` turn detector is used rather than relying on VAD alone. VA
 
 ### Language Model
 
-GPT processes the transcript and generates a response. `preemptive_generation` is enabled, meaning the LLM begins generating a response before turn detection fully confirms end-of-turn — shaving meaningful latency off perceived response time.
+Groq (qwen3-32b) processes the transcript and generates a response. `preemptive_generation` is enabled, meaning the LLM begins generating a response before turn detection fully confirms end-of-turn — shaving meaningful latency off perceived response time.
 
 ### Speech Synthesis
 

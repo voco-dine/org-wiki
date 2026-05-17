@@ -10,19 +10,23 @@
 
 ## Call flow
 
-Caller → Twilio (Telephony) → Deepgram (Streaming STT) → LangGraph Agent → ElevenLabs/PlayHT (Streaming TTS) → Caller
-                                                                  ↓
-                                               Redis (Menu Read Cache) ← NeonDB (Source of Truth)
-                                                                  ↓
-                                               POS Integration (Structured JSON, direct API)
-                                                                  ↓
-                                               Twilio SMS/WhatsApp (Order Confirmation + Feedback)
+Caller (phone/WebRTC) → LiveKit Cloud → voice-agent-backend (Deepgram STT → LLM → Cartesia TTS) → Caller
+                                                      ↓
+                                   Redis (Menu Read Cache) ← NeonDB (Source of Truth)
+                                                      ↓
+                                   backend-services (orders, call events, menu)
+                                                      ↓
+                                   POS Integration (Structured JSON, direct API)
+                                                      ↓
+                                   SMS/WhatsApp (Order Confirmation + Feedback)
 
-## Langgraph State Graph
+## Agent Workflow
 
-    Greeting → Intent Detection → Item Selection → Modifier Handling → Disambiguation → Upselling → Order Confirmation → Human Handoff (fallback)
+The voice ordering agent is built on the **LiveKit Agents SDK** using its native handoffs and tasks pattern. Each conversation phase is an `Agent` subclass or a task handed off from the root agent. LiveKit Agents handles the full voice pipeline — VAD, STT, turn detection, LLM, TTS — so there is no separate orchestration framework.
 
-Each node has defined transitions, guards, and its own context injection strategy. The graph supports cycle-back (e.g. "actually, change the first item") via LangGraph's checkpointing and state rollback.
+Conversation phases: Greeting → Intent → Item Selection → Modifier Handling → Disambiguation → Upselling → Confirmation → Handoff
+
+The agent uses `@function_tool` methods to mutate an in-memory cart (`OrderState`) during the call. Cart events are forwarded to `backend-services` as `CallEvent` records via `BackendSink` (fire-and-forget HTTP). The final order is persisted with `POST /agent/orders` at confirmation.
 
 ## Data Layer
 
@@ -34,7 +38,7 @@ See ADR-004 for the full rationale and TTL strategy.
 
 ## Menu Context Strategy
 
-Menu data is injected into the LLM context in three tiers to keep token usage low and latency fast.
+Menu data is injected into the LLM context in three tiers to keep token usage low and latency fast. See [ADR-002](../decisions/002-tiered-menu-context.md).
 
 ### Tier 1 — Compact Menu (Always in System Prompt)¶
 
@@ -44,9 +48,9 @@ Item names, categories, and prices only — typically 200–400 tokens even for 
     SIDES: Garlic Bread 5, Wings(6pc) 8, Fries 4
     DRINKS: Coke/Sprite/Fanta 3, Water 2
 
-### Tier 2 — Category Detail (Injected per LangGraph Node)¶
+### Tier 2 — Category Detail (Injected per Conversation Phase)
 
-When the conversation narrows to a category (e.g. customer says "I want a pizza"), the active LangGraph node injects full details for that category only — sizes, crusts, toppings. The rest of the menu stays out of context.
+When the conversation narrows to a category (e.g. customer says "I want a pizza"), the agent injects full details for that category only — sizes, crusts, toppings. The rest of the menu stays out of context.
 
 ### Tier 3 — Item Detail (On-Demand Tool Call)¶
 

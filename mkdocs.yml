@@ -88,10 +88,11 @@ nav:
       - Analytics: system-specification/analytics/analytics.md
   - Decisions:
       - Overview: decisions/index.md
-      - ADR-001 LangGraph over Platforms: decisions/001-langgraph-over-platforms.md
+      - ADR-001 LangGraph over Platforms (Superseded): decisions/001-langgraph-over-platforms.md
       - ADR-002 Tiered Menu Context: decisions/002-tiered-menu-context.md
       - ADR-003 Adapter Layer: decisions/003-adapter-layer.md
       - ADR-004 Redis Menu Cache: decisions/004-redis-menu-cache.md
       - ADR-005 WhatsApp Feedback: decisions/005-whatsapp-sms-feedback.md
+      - ADR-006 LiveKit Agents SDK: decisions/006-livekit-agents-sdk.md
   - Scope: scope.md
   - Evaluation: evaluation.md

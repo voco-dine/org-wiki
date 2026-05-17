@@ -4,8 +4,9 @@ This section documents key architectural decisions made during the design of Voc
 
 | ADR | Title | Status |
 |---|---|---|
-| [001](001-langgraph-over-platforms.md) | LangGraph over Low-Code Platforms | Accepted |
+| [001](001-langgraph-over-platforms.md) | LangGraph over Low-Code Platforms | Superseded |
 | [002](002-tiered-menu-context.md) | Tiered Menu Context Injection | Accepted |
 | [003](003-adapter-layer.md) | Adapter Layer (Ports & Adapters) | Accepted |
 | [004](004-redis-menu-cache.md) | Redis as Menu Read Cache | Accepted |
 | [005](005-whatsapp-sms-feedback.md) | WhatsApp / SMS Post-Call Feedback | Planned |
+| [006](006-livekit-agents-sdk.md) | LiveKit Agents SDK over LangGraph | Accepted |

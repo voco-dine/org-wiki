@@ -1,6 +1,6 @@
 # ADR-001: LangGraph over Low-Code Platforms
 
-**Status:** Accepted  
+**Status:** Superseded by [ADR-006](006-livekit-agents-sdk.md)  
 **Date:** 2026-04
 
 ## Decision
@@ -24,3 +24,7 @@ Several managed voice AI platforms exist that provide pre-built telephony, STT, 
 - Slower time to first prototype (weeks vs. hours on a managed platform).
 - We own infrastructure, scaling, and failover.
 - Telephony edge cases (hold music detection, voicemail, carrier quirks) must be discovered and handled ourselves.
+
+## Supersession Note
+
+LangGraph was not implemented. After further evaluation, the LiveKit Agents SDK was adopted instead — it provides the structured multi-phase workflow control (handoffs, tasks) that motivated this decision, without requiring a separate orchestration framework layered on top. LiveKit Agents also owns the full voice pipeline (VAD, STT, turn detection, TTS), so LangGraph would have been redundant. See [ADR-006](006-livekit-agents-sdk.md).

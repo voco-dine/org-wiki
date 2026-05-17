@@ -4,12 +4,12 @@
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| **Orchestration** | LangGraph (Python) | Stateful graph-based dialogue management; checkpointing, branching, cycle support |
-| **Backend API** | FastAPI | Async, high-performance, native WebSocket support for real-time audio streaming |
+| **Voice Pipeline** | LiveKit Agents SDK (Python) | Agent/AgentSession abstraction over STT → LLM → TTS; native handoffs and tasks for multi-phase workflows |
+| **Backend API** | FastAPI | Async, high-performance REST API for orders, menu, call events |
 | **Speech-to-Text** | Deepgram Nova-3 | Low-latency streaming ASR, multilingual mode |
-| **Text-to-Speech** | ElevenLabs / PlayHT | Natural-sounding, low-latency streaming TTS |
-| **Telephony** | Twilio Voice | Programmable voice, WebSocket media streams, SMS/WhatsApp API |
-| **LLM** | OpenAI GPT-4o / Anthropic Claude | Intent understanding, natural response generation |
+| **Text-to-Speech** | Cartesia Sonic-3 | Low-latency streaming TTS |
+| **Telephony** | LiveKit Cloud (WebRTC + SIP) | WebRTC media transport; SIP trunk for inbound phone calls; SMS/WhatsApp via Twilio (ADR-005) |
+| **LLM** | Groq (qwen3-32b) | Intent understanding, cart tool calls, natural response generation |
 | **Menu Read Cache** | Redis | Per-call menu cache; falls back to NeonDB on miss or failure |
 | **Persistent Storage** | PostgreSQL (NeonDB) | Source of truth: menu data, call logs, analytics, order history, feedback |
 | **POS Integration** | REST APIs (direct) | Structured order JSON, written directly to restaurant's POS |
