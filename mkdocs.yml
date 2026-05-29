@@ -83,6 +83,7 @@ nav:
   - Home: index.md
   - System Specification:
       - Architecture: system-specification/architecture.md
+      - Sequence Diagram: system-specification/sequence.md
       - Tech Stack: system-specification/tech-stack.md
       - Audio Pipe: system-specification/audio-pipe/audio-pipe.md
       - Analytics: system-specification/analytics/analytics.md
