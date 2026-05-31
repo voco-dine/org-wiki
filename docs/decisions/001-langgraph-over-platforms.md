@@ -1,7 +1,13 @@
 # ADR-001: LangGraph over Low-Code Platforms
 
-**Status:** Accepted  
+**Status:** Accepted — **orchestration framework superseded by [ADR-006](006-livekit-over-langgraph.md)** (2026-05)  
 **Date:** 2026-04
+
+> **Update (2026-05):** The "build custom instead of a low-code platform" decision below still
+> stands. What changed is the orchestration framework — LangGraph was dropped in favour of the
+> **LiveKit Agents SDK** (a single prompt-driven agent with function tools); see ADR-006. Also note
+> the production database is **Supabase PostgreSQL**, not NeonDB as the original rationale says.
+> Read the rest of this record as the point-in-time reasoning, not the current implementation.
 
 ## Decision
 

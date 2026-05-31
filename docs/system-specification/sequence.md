@@ -1,6 +1,6 @@
 # Sequence Diagram
 
-End-to-end sequence for one phone/WebRTC call through the VocoDine stack. Reflects the implementation as of 2026-05 in `voice-agent-backend/src/agent.py`, `voice-agent-backend/src/backend_client.py`, `voice-agent-backend/src/ordering.py`, and `backend-services/app/api/routes/agent_tools.py` — not aspirational architecture. Where the running code diverges from an ADR, that gap is called out at the bottom of the page.
+End-to-end sequence for one phone/WebRTC call through the VocoDine stack. Reflects the implementation as of 2026-05 in `voice-agent-backend/src/agent.py`, `voice-agent-backend/src/assistant.py`, `voice-agent-backend/src/backend/client.py`, `voice-agent-backend/src/cart/state.py`, and `backend-services/app/api/routes/agent_tools.py` — not aspirational architecture. Where the running code diverges from an ADR, that gap is called out at the bottom of the page.
 
 ## Participants
 
@@ -10,10 +10,10 @@ End-to-end sequence for one phone/WebRTC call through the VocoDine stack. Reflec
 | LK | LiveKit Cloud (WebRTC transport, agent dispatch) |
 | VA | `voice-agent-backend` (LiveKit Agents process) |
 | DG | Deepgram (streaming STT, `nova-3`) |
-| GR | Groq (LLM, `qwen3-32b` via `lk_groq.LLM`) |
-| CT | Cartesia (TTS, `sonic-3`) |
+| GR | Vertex AI Gemini (LLM, `gemini-3.1-flash-lite` via `google.LLM`) |
+| CT | Deepgram (TTS, `aura-2-thalia-en`) |
 | BS | `backend-services` (FastAPI, async SQLAlchemy) |
-| DB | NeonDB (PostgreSQL — source of truth) |
+| DB | Supabase (PostgreSQL — source of truth) |
 
 ## Sub-flows
 
@@ -37,16 +37,16 @@ sequenceDiagram
 
 ### 2. Session bootstrap — caller connects → agent is ready to speak
 
-Everything that has to happen *before* the agent can take its first turn. Three round-trips to `backend-services`: health, menu, call-create. The menu fetch dominates session-start latency (cold Neon query ≈1.5–2 s).
+Everything that has to happen *before* the agent can take its first turn. Three round-trips to `backend-services`: health, menu, call-create. The menu fetch dominates session-start latency (cold Supabase query ≈1.5–2 s on first hit).
 
 ```mermaid
 sequenceDiagram
     actor Caller
     participant LK as LiveKit Cloud
     participant VA as voice-agent-backend
-    participant CT as Cartesia
+    participant CT as Deepgram
     participant BS as backend-services
-    participant DB as NeonDB
+    participant DB as Supabase
 
     Caller->>LK: WebRTC / SIP connect
     LK->>VA: dispatch → my_agent(ctx)
@@ -58,7 +58,7 @@ sequenceDiagram
     BS->>DB: agent_core.fetch_menu(...)<br/>SELECT stores + menu_categories + menu_items<br/>+ modifier_groups + modifiers
     DB-->>BS: rows
     BS-->>VA: 201 MenuRead
-    Note right of VA: format_compact_menu → Tier-1 in system prompt
+    Note right of VA: format_categories → Tier-1 (category names) in system prompt
 
     VA->>BS: BackendClient.start_call(...)<br/>POST /agent/calls
     BS->>DB: INSERT INTO calls (status='active')
@@ -75,7 +75,7 @@ sequenceDiagram
 
 ### 3. One conversational turn — speech in, speech out
 
-The per-utterance loop. The LLM either replies directly (happy path shown here) or emits a tool call (sub-flows 4–8). STT is streaming and `preemptive_generation=True` lets the LLM start before STT closes — that overlap isn't shown but is real.
+The per-utterance loop. The LLM either replies directly (happy path shown here) or emits a tool call (sub-flows 4–8). STT is streaming, so the LLM can begin as soon as a transcript segment is available — that overlap isn't shown but is real.
 
 ```mermaid
 sequenceDiagram
@@ -83,14 +83,14 @@ sequenceDiagram
     participant LK as LiveKit Cloud
     participant VA as voice-agent-backend
     participant DG as Deepgram
-    participant GR as Groq
-    participant CT as Cartesia
+    participant GR as Gemini
+    participant CT as Deepgram
 
     Caller->>LK: speech
     LK->>VA: PCM frames
     VA->>DG: streaming STT (nova-3)
     DG-->>VA: transcript
-    VA->>GR: chat.completions (qwen3-32b)<br/>system + Tier-1 menu + history + tools
+    VA->>GR: chat.completions (gemini-3.1-flash-lite)<br/>system + Tier-1 menu + history + tools
     alt direct reply
         GR-->>VA: assistant message
     else tool call
@@ -98,28 +98,26 @@ sequenceDiagram
         Note right of VA: see sub-flows 4–8<br/>VA executes tool, returns result to GR
         GR-->>VA: assistant message
     end
-    VA->>CT: TTS (sonic-3)
+    VA->>CT: TTS (aura-2)
     CT-->>VA: audio frames
     VA-->>LK: stream
     LK-->>Caller: spoken reply
 ```
 
-### 4. Tool: `focus_category` — Tier 2 (category narrowing)
+### 4. Tool: `get_category_items` — Tier 2 (category narrowing)
 
 Triggered when the customer narrows to a category ("what pizzas do you have?"). All menu work happens in-memory; the only network call is a fire-and-forget telemetry event.
 
 ```mermaid
 sequenceDiagram
-    participant GR as Groq
+    participant GR as Gemini
     participant VA as voice-agent-backend
     participant BS as backend-services
-    participant DB as NeonDB
+    participant DB as Supabase
 
-    GR-->>VA: tool_call focus_category(name)
-    VA->>VA: ordering.find_category(menu, name)
-    VA->>VA: ordering.format_category_details(cat)
-    VA->>VA: state.set_active_category(name)
-    VA-)BS: BackendSink.emit → log_event(...)<br/>POST /agent/calls/{id}/events<br/>type=category_focused (fire-and-forget)
+    GR-->>VA: tool_call get_category_items(category)
+    VA->>VA: menu.lookup.category_listing(menu, category)<br/>(available items + prices, one category)
+    VA-)BS: tracer emits type=tool_call<br/>node_name=get_category_items<br/>POST /agent/calls/{id}/events (fire-and-forget)
     BS->>DB: SELECT FROM calls WHERE id=:id (FK check)
     BS->>DB: INSERT INTO call_events
     VA-->>GR: tool result {category, details}
@@ -131,11 +129,11 @@ Pure in-memory lookup. The aspirational Redis path (ADR-004) and the dormant `GE
 
 ```mermaid
 sequenceDiagram
-    participant GR as Groq
+    participant GR as Gemini
     participant VA as voice-agent-backend
 
     GR-->>VA: tool_call get_item_details(name)
-    VA->>VA: ordering.find_item(menu, name)
+    VA->>VA: menu.lookup.find_item(menu, name)
     Note right of VA: no network, no DB —<br/>cached menu only
     VA-->>GR: tool result {item + modifier_groups + allergens}
 ```
@@ -146,10 +144,10 @@ The customer is editing the order. Cart state lives in `OrderState` (in-memory);
 
 ```mermaid
 sequenceDiagram
-    participant GR as Groq
+    participant GR as Gemini
     participant VA as voice-agent-backend
     participant BS as backend-services
-    participant DB as NeonDB
+    participant DB as Supabase
 
     GR-->>VA: tool_call add_item / remove_item / modify_item
     VA->>VA: find_item / fuzzy_candidates
@@ -165,12 +163,12 @@ The only point in the call where the cart actually becomes durable. Synchronous 
 
 ```mermaid
 sequenceDiagram
-    participant GR as Groq
+    participant GR as Gemini
     participant VA as voice-agent-backend
     participant BS as backend-services
-    participant DB as NeonDB
+    participant DB as Supabase
 
-    GR-->>VA: tool_call confirm_order(phone, special_instructions)
+    GR-->>VA: tool_call confirm_order(order_type, address, phone, special_instructions)
     VA->>BS: BackendClient.create_order(payload)<br/>POST /agent/orders
     BS->>DB: SELECT FROM calls WHERE id=:call_id
     BS->>DB: SELECT FROM stores WHERE id=:store_id
@@ -180,7 +178,7 @@ sequenceDiagram
             BS->>DB: _resolve_modifier()<br/>SELECT FROM modifiers
         end
     end
-    BS->>DB: INSERT INTO orders (status='pending')
+    BS->>DB: INSERT INTO orders<br/>(status='pending', type, address)
     BS->>DB: INSERT INTO order_items
     BS->>DB: INSERT INTO order_item_modifiers
     BS->>DB: SELECT FROM orders WHERE id=:id<br/>+ selectinload(items)
@@ -195,10 +193,10 @@ The agent gives up. A telemetry event is recorded locally and a fire-and-forget 
 
 ```mermaid
 sequenceDiagram
-    participant GR as Groq
+    participant GR as Gemini
     participant VA as voice-agent-backend
     participant BS as backend-services
-    participant DB as NeonDB
+    participant DB as Supabase
 
     GR-->>VA: tool_call request_handoff(reason)
     VA->>VA: state.sink.emit({type: handoff_requested})
@@ -231,10 +229,10 @@ sequenceDiagram
     participant LK as LiveKit Cloud
     participant VA as voice-agent-backend
     participant DG as Deepgram
-    participant GR as Groq
-    participant CT as Cartesia
+    participant GR as Gemini
+    participant CT as Deepgram
     participant BS as backend-services
-    participant DB as NeonDB
+    participant DB as Supabase
 
     rect rgb(245, 245, 220)
     Note over Caller,DB: Process startup (once per worker)
@@ -259,7 +257,7 @@ sequenceDiagram
     BS->>DB: SELECT * FROM modifier_groups<br/>JOIN modifier_group_items<br/>+ selectinload(modifiers)
     DB-->>BS: groups + modifiers
     BS-->>VA: 201 MenuRead
-    Note right of VA: ordering.format_compact_menu(menu)<br/>→ Tier-1 block in system prompt
+    Note right of VA: menu.lookup.format_categories(menu)<br/>→ Tier-1 (category names) in system prompt
 
     VA->>BS: BackendClient.start_call(store_id, sid, phone)<br/>POST /agent/calls
     BS->>BS: agent_tools.post_call()<br/>→ agent_core.create_call(db, payload)
@@ -281,16 +279,16 @@ sequenceDiagram
     LK->>VA: PCM frames
     VA->>DG: streaming STT (nova-3)
     DG-->>VA: transcript
-    VA->>GR: lk_groq.LLM.chat (qwen3-32b)<br/>system+history+Tier-1 menu+tools
+    VA->>GR: google.LLM.chat (gemini-3.1-flash-lite)<br/>system+history+Tier-1 menu+tools
     GR-->>VA: assistant msg OR tool_call
     end
 
     rect rgb(255, 245, 230)
     Note over VA,DB: Tool branches
 
-    alt focus_category(name) — Tier 2
-        VA->>VA: ordering.find_category(menu, name)<br/>ordering.format_category_details(cat)<br/>state.set_active_category(name)
-        VA-)BS: BackendSink.emit → BackendClient.log_event(call_id)<br/>POST /agent/calls/{id}/events<br/>type=category_focused (fire-and-forget)
+    alt get_category_items(category) — Tier 2
+        VA->>VA: menu.lookup.category_listing(menu, category)
+        VA-)BS: tracer emits type=tool_call node_name=get_category_items<br/>POST /agent/calls/{id}/events (fire-and-forget)
         BS->>BS: agent_core.create_call_event(db, call_id, payload)
         BS->>DB: SELECT * FROM calls WHERE id=:call_id (existence check)
         BS->>DB: INSERT INTO call_events<br/>(call_id, event_type, payload)
@@ -303,14 +301,14 @@ sequenceDiagram
         VA-->>GR: tool result {status, item, order_total}
 
     else get_item_details(name) — Tier 3
-        VA->>VA: ordering.find_item(menu, name)<br/>(in-memory only — no network)
+        VA->>VA: menu.lookup.find_item(menu, name)<br/>(in-memory only — no network)
         VA-->>GR: tool result {item + modifier_groups + allergens}
 
     else get_order_summary
         VA->>VA: OrderState.summary()
         VA-->>GR: tool result {items[], total}
 
-    else confirm_order(phone, instructions)
+    else confirm_order(order_type, address, phone, instructions)
         VA->>BS: BackendClient.create_order(payload)<br/>POST /agent/orders
         BS->>BS: agent_tools.post_order()<br/>→ agent_core.create_order(db, payload)
         BS->>DB: SELECT * FROM calls WHERE id=:call_id
@@ -321,7 +319,7 @@ sequenceDiagram
                 BS->>DB: _resolve_modifier()<br/>SELECT * FROM modifiers WHERE external_id=… OR id=…
             end
         end
-        BS->>DB: INSERT INTO orders<br/>(call_id, store_id, total_amount, phone, status='pending')
+        BS->>DB: INSERT INTO orders<br/>(call_id, store_id, total_amount, phone,<br/>status='pending', type, address)
         BS->>DB: INSERT INTO order_items (one per line)
         BS->>DB: INSERT INTO order_item_modifiers (one per modifier)
         BS->>DB: SELECT * FROM orders WHERE id=:id<br/>+ selectinload(items)
@@ -342,7 +340,7 @@ sequenceDiagram
     rect rgb(240, 255, 240)
     Note over Caller,DB: Response back to caller
     GR-->>VA: assistant message (post tool result)
-    VA->>CT: cartesia.TTS (sonic-3)
+    VA->>CT: deepgram.TTS (aura-2)
     CT-->>VA: audio frames
     VA-->>LK: stream audio
     LK-->>Caller: spoken reply
@@ -365,7 +363,7 @@ sequenceDiagram
 | `log_event` (every tool emit) | `calls` (FK existence) | `call_events` |
 | `create_order` (`confirm_order`) | `calls`, `stores`, `menu_items`, `modifiers`, `orders` | `orders`, `order_items`, `order_item_modifiers` |
 | `update_call` (`request_handoff`) | `calls` | `calls` |
-| `get_item_details`, `focus_category`, `get_order_summary`, cart-side of `add_item`/`remove_item`/`modify_item` | — (in-memory menu only) | — |
+| `get_item_details`, `get_category_items`, `get_order_summary`, cart-side of `add_item`/`remove_item`/`modify_item` | — (in-memory menu only) | — |
 
 ## Function map (voice-agent ↔ backend-services)
 
@@ -389,5 +387,5 @@ The diagram is honest about what's wired today; these are the places the current
 2. **Tier-3 is in-process, not a network fetch.** [ADR-002](../decisions/002-tiered-menu-context.md) describes `get_item_details` as a "single Redis lookup." In code it's a pure dict traversal of the cached menu. Cheaper than the ADR specifies, but no fallback to canonical data if the cached menu drifts mid-call.
 3. **Event writes are fire-and-forget.** `BackendSink.emit` schedules `asyncio.create_task` and returns immediately. The tool path doesn't await it. On session shutdown there's no drain step, so a tail of late `call_events` inserts can be cancelled silently. Acceptable for analytics today, not acceptable once `call_events` becomes load-bearing.
 4. **Existence check before every `call_event` insert.** `create_call_event` does a `SELECT * FROM calls WHERE id=:id` before each `INSERT INTO call_events`. Cheap (PK lookup) but it's per-event write amplification — worth knowing if event volume rises.
-5. **Item availability not filtered on the agent side.** `menu_categories` is filtered by `is_active=true` server-side, but the agent iterates all items in `format_category_details` and only filters `is_available` on modifiers. Items flagged `is_available=false` in the DB still appear in Tier-2 detail blocks until the menu is re-fetched.
-6. **STT/LLM/TTS shown sequentially.** In reality Deepgram streams and `preemptive_generation=True` lets the LLM start while the user is still finishing. Mermaid can't express that cleanly without losing the per-turn structure, so the diagram is linearised. See [audio-pipe](audio-pipe/audio-pipe.md) for the real-time flow.
+5. **Menu is cached per call.** The full menu is fetched once at session start and held in memory for the whole call. `category_listing` (Tier-2) and `find_modifier` do filter out `is_available=false` rows, but an item toggled unavailable *mid-call* won't be reflected until the next call re-fetches the menu.
+6. **STT/LLM/TTS shown sequentially.** In reality Deepgram streams partial transcripts, so STT, LLM and TTS overlap rather than running strictly in sequence. Mermaid can't express that cleanly without losing the per-turn structure, so the diagram is linearised. See [audio-pipe](audio-pipe/audio-pipe.md) for the real-time flow.

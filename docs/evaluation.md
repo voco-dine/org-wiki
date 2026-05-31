@@ -12,7 +12,7 @@ The system is evaluated across three dimensions.
 
 | Metric | Target | Method |
 |---|---|---|
-| End-to-end latency per turn | < 1 s | Structured logs from LangGraph node transitions |
+| End-to-end latency per turn | < 1 s | `call_events` (stt/llm/tts/eou metrics) emitted by the voice agent |
 | Grounding accuracy | High % of confirmed orders containing only valid menu items/combos | Log validation failures at confirmation node |
 | Human handoff rate | Minimised | % of calls escalated to staff |
 
@@ -26,6 +26,6 @@ The system is evaluated across three dimensions.
 
 ## Open Questions
 
-- **LLM choice benchmarking** (GPT-4o vs. Claude): under consideration, may be out of FYP scope. TBD.
+- **LLM choice benchmarking**: the agent currently runs Google Vertex AI Gemini (`gemini-3.1-flash-lite`); benchmarking it against other models is under consideration and may be out of FYP scope. TBD.
 - **Baseline comparison**: comparing against a naive LLM-only approach (no grounding, no state management) to demonstrate measurable improvement from the stateful architecture — under consideration as part of the evaluation design.
 - **Ground truth annotation**: who annotates test calls and how many calls are needed for a statistically meaningful sample — TBD.

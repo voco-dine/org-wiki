@@ -9,9 +9,10 @@ VocoDine is an AI-powered voice agent that handles restaurant phone orders auton
 
 ## Sections
 
-- [Architecture](system-specification/architecture.md) — System diagram, call flow, LangGraph state graph, and menu context strategy.
+- [Architecture](system-specification/architecture.md) — System diagram, call flow, conversation orchestration (LiveKit Agents SDK), and menu context strategy.
 - [Tech Stack](system-specification/tech-stack.md) — Technology choices and latency budget.
 - [Audio Pipe](system-specification/audio-pipe/audio-pipe.md) — Voice pipeline components (STT, LLM, TTS, VAD).
+- [Sequence](system-specification/sequence.md) — End-to-end call sequence diagrams (voice-agent ↔ backend-services).
 - [Analytics](system-specification/analytics/analytics.md) — Metrics and dashboard.
 - [Decisions](decisions/index.md) — Architecture Decision Records.
 - [Scope](scope.md) — What is and isn't in scope, plus timeline.

@@ -2,18 +2,22 @@
 
 ## Components
 
+The table reflects what runs in code today. Where it differs from the original design intent, the
+"Purpose" note says so.
+
 | Layer | Technology | Purpose |
 |---|---|---|
-| **Orchestration** | LangGraph (Python) | Stateful graph-based dialogue management; checkpointing, branching, cycle support |
-| **Backend API** | FastAPI | Async, high-performance, native WebSocket support for real-time audio streaming |
-| **Speech-to-Text** | Deepgram Nova-3 | Low-latency streaming ASR, multilingual mode |
-| **Text-to-Speech** | ElevenLabs / PlayHT | Natural-sounding, low-latency streaming TTS |
-| **Telephony** | Twilio Voice | Programmable voice, WebSocket media streams, SMS/WhatsApp API |
-| **LLM** | OpenAI GPT-4o / Anthropic Claude | Intent understanding, natural response generation |
-| **Menu Read Cache** | Redis | Per-call menu cache; falls back to NeonDB on miss or failure |
-| **Persistent Storage** | PostgreSQL (NeonDB) | Source of truth: menu data, call logs, analytics, order history, feedback |
-| **POS Integration** | REST APIs (direct) | Structured order JSON, written directly to restaurant's POS |
-| **Dashboard** | React + Recharts | Single-page analytics dashboard |
+| **Orchestration** | LiveKit Agents SDK (Python) | Single prompt-driven `Assistant(Agent)` + function tools. Replaced LangGraph — see [ADR-006](../decisions/006-livekit-over-langgraph.md) |
+| **Backend API** | FastAPI + async SQLAlchemy 2 | `backend-services`: `/agent/*` (agent), `/api/calls` + `/api/analytics` (dashboard) |
+| **Transport / Telephony** | LiveKit Cloud (WebRTC + SIP) | Media transport and agent dispatch; PSTN via a Twilio SIP trunk (`twilio_call_sid` recorded per call) |
+| **Speech-to-Text** | Deepgram `nova-3` | Low-latency streaming ASR (EU endpoint) |
+| **LLM** | Google **Vertex AI** Gemini (`gemini-3.1-flash-lite`) | Intent understanding + response generation, via `livekit-plugins-google`. Migrated from Groq `qwen3-32b` |
+| **Text-to-Speech** | Deepgram Aura-2 (`aura-2-thalia-en`) | Streaming TTS. Migrated from Cartesia `sonic-3` |
+| **VAD / Turn / Noise** | Silero VAD · `MultilingualModel` turn detector · ai-coustics `SPARROW_S` | End-of-turn detection and audio enhancement |
+| **Menu cache** | Redis (*planned, not implemented*) | [ADR-004](../decisions/004-redis-menu-cache.md) intent. Today the menu is cached in agent process memory per call |
+| **Persistent Storage** | PostgreSQL (**Supabase**) | Source of truth: tenants, stores, menu, call logs/events, orders, feedback |
+| **POS Integration** | `sync-service` (raw asyncpg) + adapter | Menu/order sync between POS and the DB — see [ADR-003](../decisions/003-adapter-layer.md) |
+| **Dashboard** | Next.js 15 / React 19 + LiveKit SDK | Control panel + live monitoring; reads `/api/calls` and `/api/analytics` |
 
 ---
 
