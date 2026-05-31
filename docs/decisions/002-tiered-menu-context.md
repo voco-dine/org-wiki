@@ -18,7 +18,7 @@ For typical restaurant menus (30–150 items), the LLM can resolve item names, f
 | Tier | Content | When Loaded | Cost |
 |---|---|---|---|
 | **1** | Names, categories, prices only | Always in system prompt | ~200–400 tokens, cached by LLM provider after first turn |
-| **2** | Full category detail (sizes, toppings, variants) | Injected when LangGraph node enters that category | Active category only |
+| **2** | Full category detail (sizes, toppings, variants) | Returned on demand by the `get_category_items` tool | Active category only |
 | **3** | Item-level detail (modifiers, allergens, descriptions) | On-demand via `get_item_details(item_id)` tool call | Single Redis lookup, microseconds |
 
 **Vector DB kept as conditional fallback only.** If the LLM cannot confidently resolve a vague query (e.g. "something light and spicy"), it can call a semantic search tool. The latency cost is acceptable in that context — the agent can naturally say "let me check" for unusual requests.

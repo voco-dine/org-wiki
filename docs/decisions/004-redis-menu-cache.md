@@ -1,7 +1,15 @@
 # ADR-004: Redis as Menu Read Cache
 
-**Status:** Accepted  
+**Status:** Accepted — **not implemented as of 2026-05**  
 **Date:** 2026-04
+
+> **Update (2026-05):** Redis is **not** in the running system. The voice agent fetches the full
+> menu once per call from `backend-services` (`GET /agent/menu`) and holds it in **process memory**
+> for the call's lifetime; Tier-3 item lookups are in-memory dict traversals, not Redis `SISMEMBER`
+> calls. This is functionally equivalent for a single agent process but is not shared across replicas
+> and does not survive a restart. The source of truth is **Supabase PostgreSQL**, not NeonDB. The
+> design below is retained as the intended caching strategy if/when per-call latency or multi-replica
+> sharing makes a real cache worthwhile.
 
 ## Decision
 

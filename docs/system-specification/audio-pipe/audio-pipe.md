@@ -1,12 +1,12 @@
 # Audio Pipe
 
-    Browser (React/JS LiveKit SDK)
-            ↕ WebRTC
-    LiveKit Cloud/Server  ←→    Agent Process
+    Browser (React/JS LiveKit SDK) / Twilio SIP caller
+            ↕ WebRTC / SIP
+    LiveKit Cloud/Server  ←→    Agent Process (LiveKit Agents SDK)
                                         ↕
-                                LangGraph core
+                            Assistant(Agent) + function tools
                                         ↕
-                            Order DB / Menu data
+                            backend-services (/agent/*) → Supabase
 
 ---
 
@@ -28,14 +28,20 @@ A `MultilingualModel` turn detector is used rather than relying on VAD alone. VA
 
 ### Language Model
 
-GPT processes the transcript and generates a response. `preemptive_generation` is enabled, meaning the LLM begins generating a response before turn detection fully confirms end-of-turn — shaving meaningful latency off perceived response time.
+Google **Vertex AI** Gemini (`gemini-3.1-flash-lite`, via `livekit-plugins-google` with
+`vertexai=True`, location `global`, `thinking_level=minimal`) processes the transcript and generates
+the response and tool calls. It replaced the earlier Groq `qwen/qwen3-32b` model (kept only as a
+commented-out fallback). Auth is Vertex Application Default Credentials + `GOOGLE_CLOUD_PROJECT`.
 
 ### Speech Synthesis
 
-Cartesia Sonic-3 converts the LLM output to audio streamed back into the LiveKit room.
+Deepgram **Aura-2** (`aura-2-thalia-en`) converts the LLM output to audio streamed back into the
+LiveKit room (EU endpoint). It replaced Cartesia `sonic-3`.
 
 ### Noise Cancellation
 
-Audio enhancement is applied conditionally based on participant type. SIP callers receive BVC Telephony noise cancellation, optimized for phone audio characteristics. Browser participants receive ai_coustics enhancement instead, tuned for WebRTC audio profiles.
+ai-coustics audio enhancement (`EnhancerModel.SPARROW_S`) is applied to the room audio input via
+`room_io.RoomOptions(audio_input=AudioInputOptions(noise_cancellation=...))`. It is applied
+uniformly — there is no participant-type branch (no LiveKit Cloud BVC) in the current code.
 
 ---

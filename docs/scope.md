@@ -25,7 +25,7 @@
 | Phase | Period | Focus |
 |---|---|---|
 | Literature Review & Proposal | Mar 2026 | Research, proposal submission |
-| Architecture & Core Pipeline | Apr–Jun 2026 | STT/TTS/telephony integration, LangGraph engine, menu grounding, confirmation, upselling, handoff |
+| Architecture & Core Pipeline | Apr–Jun 2026 | STT/TTS/telephony integration, LiveKit Agents orchestration, menu grounding, confirmation, handoff |
 | **Semester Break** | **Jul–Aug 2026** | **No scheduled work** |
 | Analytics, Deployment & Evaluation | Sep–Nov 2026 | Dashboard, restaurant testing, data collection, evaluation |
 | Final Report & Documentation | Nov 2026–Jan 2027 | Write-up, documentation, presentation |

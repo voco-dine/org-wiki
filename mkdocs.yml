@@ -94,5 +94,6 @@ nav:
       - ADR-003 Adapter Layer: decisions/003-adapter-layer.md
       - ADR-004 Redis Menu Cache: decisions/004-redis-menu-cache.md
       - ADR-005 WhatsApp Feedback: decisions/005-whatsapp-sms-feedback.md
+      - ADR-006 LiveKit over LangGraph: decisions/006-livekit-over-langgraph.md
   - Scope: scope.md
   - Evaluation: evaluation.md

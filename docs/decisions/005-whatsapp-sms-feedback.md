@@ -5,7 +5,7 @@
 
 ## Decision
 
-Collect post-call feedback via WhatsApp (or SMS fallback) using the existing Twilio integration. Responses are logged to NeonDB.
+Collect post-call feedback via WhatsApp (or SMS fallback) using the existing Twilio integration. Responses are logged to Supabase (PostgreSQL).
 
 ## Context
 
@@ -17,7 +17,7 @@ The evaluation framework requires a user satisfaction signal. A post-call survey
 2. ~30–45 minutes after the order (after estimated delivery), send a follow-up: *"How was your ordering experience? Reply 1–5."*
 3. Rating ≤ 3 → follow up: *"Sorry to hear that. What went wrong? Reply briefly."* Store free-text.
 4. Rating 4–5 → reply *"Thank you!"* and close.
-5. Log rating + caller ID + order ID to NeonDB.
+5. Log rating + caller ID + order ID to Supabase.
 
 ## Rationale
 

@@ -1,5 +1,12 @@
 # VOCODINE ARCHITECTURE
 
+!!! note "Implementation status (2026-05)"
+    The orchestration layer was migrated off LangGraph onto the **LiveKit Agents SDK**, the LLM moved
+    to **Google Vertex AI Gemini**, TTS moved to **Deepgram**, and the database in use is **Supabase
+    PostgreSQL** (not NeonDB). The rendered diagram below may still show the older design; the prose
+    on this page reflects the running code. See [ADR-006](../decisions/006-livekit-over-langgraph.md)
+    and [sequence](sequence.md).
+
 ## High level diagram
 
 ![System Architecture](../assets/murtazafyp.drawio.png)
@@ -10,46 +17,78 @@
 
 ## Call flow
 
-Caller → Twilio (Telephony) → Deepgram (Streaming STT) → LangGraph Agent → ElevenLabs/PlayHT (Streaming TTS) → Caller
+Caller → Twilio SIP / WebRTC → LiveKit Cloud → Deepgram STT (nova-3) → Vertex AI Gemini (LiveKit Agents) → Deepgram TTS (aura-2) → Caller
                                                                   ↓
-                                               Redis (Menu Read Cache) ← NeonDB (Source of Truth)
+                                               backend-services (FastAPI, `/agent/*`, header `X-Agent-Key`)
                                                                   ↓
-                                               POS Integration (Structured JSON, direct API)
+                                               Supabase / PostgreSQL (Source of Truth)
                                                                   ↓
-                                               Twilio SMS/WhatsApp (Order Confirmation + Feedback)
+                                               POS sync via `sync-service` (see ADR-003)
+                                                                  ↓
+                                               WhatsApp/SMS order confirmation + feedback (planned, see ADR-005)
 
-## Langgraph State Graph
+The voice agent holds the menu and cart in process memory for the call and persists everything through
+`backend-services` over HTTP: the menu is fetched once at call start, the call row and every
+transcript/metric/cart event are written as it goes, and the order is created on confirmation.
 
-    Greeting → Intent Detection → Item Selection → Modifier Handling → Disambiguation → Upselling → Order Confirmation → Human Handoff (fallback)
+## Conversation orchestration (LiveKit Agents SDK)
 
-Each node has defined transitions, guards, and its own context injection strategy. The graph supports cycle-back (e.g. "actually, change the first item") via LangGraph's checkpointing and state rollback.
+Orchestration is **not** a LangGraph state machine. It is a single, prompt-driven LiveKit
+`Assistant(Agent)` (`voice-agent-backend/src/assistant.py`) that exposes a flat set of function
+tools. The conversation flow is driven by the system prompt and by the `status` each tool returns —
+there are no coded graph nodes, no checkpointing, and no upselling step.
+
+    greet (on_enter) → browse one category at a time → add / modify / remove items
+        → read back order + total → ask pickup or delivery → (delivery) require + confirm address
+        → ask phone → confirm_order → goodbye          (request_handoff escalates to a human anytime)
+
+Function tools: `add_item`, `remove_item`, `modify_item`, `get_item_details`, `get_category_items`,
+`get_order_summary`, `confirm_order`, `request_handoff`. Menu grounding is structural — an item the
+agent can't resolve against the fetched menu returns `off_menu`/`ambiguous` rather than being added.
+
+See [ADR-006](../decisions/006-livekit-over-langgraph.md) for why LangGraph was dropped.
 
 ## Data Layer
 
-NeonDB (PostgreSQL) is the source of truth for all persistent data: menu structure, item modifiers, prices, call logs, order history, and analytics.
+**Supabase (PostgreSQL)** is the source of truth for all persistent data: tenants, stores, menu
+structure, item modifiers, prices, call logs, call events, order history, and feedback. The data
+model is a strict hierarchy — **Tenant → Store → everything** — and `backend-services` resolves the
+voice agent's POS `external_id`s to internal UUIDs on write. `sync-service` (a separate worker) also
+writes this database directly via raw asyncpg.
 
-Redis sits on top as a read cache for live conversations. Menu data is loaded into Redis at call start and kept warm via the adapter sync. All reads during a conversation hit Redis for sub-millisecond latency. On a cache miss or Redis failure, the system falls back to NeonDB directly.
-
-See ADR-004 for the full rationale and TTL strategy.
+There is **no Redis cache today**. [ADR-004](../decisions/004-redis-menu-cache.md) specifies Redis as
+a per-call menu read cache, but it is not implemented: the agent fetches the full menu once from
+`GET /agent/menu` and keeps it in process memory for the call's lifetime. That is functionally
+equivalent for a single process but is not shared across replicas and does not survive a restart.
 
 ## Menu Context Strategy
 
-Menu data is injected into the LLM context in three tiers to keep token usage low and latency fast.
+The full menu is fetched once per call (`GET /agent/menu`) and cached in process memory. It is then
+surfaced into the LLM context in three tiers to keep token usage low and latency fast.
+(`voice-agent-backend/src/menu/lookup.py`.)
 
-### Tier 1 — Compact Menu (Always in System Prompt)¶
+### Tier 1 — Category names (always in the system prompt)
 
-Item names, categories, and prices only — typically 200–400 tokens even for large menus. Placed in the system prompt so it is cached by the LLM provider after the first turn and not re-paid on every exchange.
+Only the **category names** go in the prompt (`format_categories`) — a short comma-separated list.
+The prompt was deliberately revised to stop the agent reciting the whole menu over the phone and to
+keep the system prompt small enough to stay provider-cached.
 
-    PIZZA: Margherita 12, Pepperoni 14, BBQ Chicken 15
-    SIDES: Garlic Bread 5, Wings(6pc) 8, Fries 4
-    DRINKS: Coke/Sprite/Fanta 3, Water 2
+    Categories: Pizza, Sides, Drinks, Desserts
 
-### Tier 2 — Category Detail (Injected per LangGraph Node)¶
+### Tier 2 — Category detail (on-demand tool call)
 
-When the conversation narrows to a category (e.g. customer says "I want a pizza"), the active LangGraph node injects full details for that category only — sizes, crusts, toppings. The rest of the menu stays out of context.
+When the conversation narrows to a category (e.g. "what pizzas do you have?"), the agent calls
+`get_category_items(category)` (`category_listing`), which returns the available items + prices for
+that one category. The rest of the menu stays out of context. This is a tool call, not a graph-node
+injection.
 
-### Tier 3 — Item Detail (On-Demand Tool Call)¶
+### Tier 3 — Item detail (on-demand tool call)
 
-When a customer asks about modifiers, allergens, or descriptions, the LLM calls get_item_details(item_id). Only the requested item's data enters context — a direct Redis lookup with no embedding overhead.
+When a customer asks about modifiers, allergens, or descriptions, the agent calls
+`get_item_details(item_name)`. Only the requested item's data enters context. In the running code
+this resolves against the **in-memory menu** (a dict traversal), not Redis — cheaper than ADR-002
+describes, but with no fallback to canonical data if the cached menu drifts mid-call. The
+`GET /agent/menu/items` endpoint exists for a true round-trip but is currently unused.
 
-See ADR-002 for why a vector DB was not placed in the critical path.
+See [ADR-002](../decisions/002-tiered-menu-context.md) for why a vector DB was not placed in the
+critical path.
