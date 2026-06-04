@@ -1,5 +1,5 @@
 {
-  "buildCommand": "pip install -r requirements.txt && mkdocs build",
+  "buildCommand": "uv pip install -r requirements.txt --system && mkdocs build",
   "outputDirectory": "site",
   "framework": null
 }
