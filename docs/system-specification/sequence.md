@@ -7,7 +7,8 @@ End-to-end sequence for one phone/WebRTC call through the VocoDine stack. Reflec
 | Symbol | Component |
 |---|---|
 | Caller | Phone / WebRTC client |
-| LK | LiveKit Cloud (WebRTC transport, agent dispatch) |
+| SIP | LiveKit SIP server (self-hosted, open source — PSTN/SIP ingress) |
+| LK | LiveKit server / SFU (self-hosted, open source — WebRTC transport, agent dispatch) |
 | VA | `voice-agent-backend` (LiveKit Agents process) |
 | DG | Deepgram (streaming STT, `nova-3`) |
 | GR | Vertex AI Gemini (LLM, `gemini-3.1-flash-lite` via `google.LLM`) |
@@ -25,7 +26,7 @@ LiveKit dispatches one OS process per worker. Before any session lands, `prewarm
 
 ```mermaid
 sequenceDiagram
-    participant LK as LiveKit Cloud
+    participant LK as LiveKit server (self-hosted)
     participant VA as voice-agent-backend
 
     LK->>VA: spawn worker process
@@ -42,13 +43,19 @@ Everything that has to happen *before* the agent can take its first turn. Three 
 ```mermaid
 sequenceDiagram
     actor Caller
-    participant LK as LiveKit Cloud
+    participant SIP as LiveKit SIP server
+    participant LK as LiveKit SFU (self-hosted)
     participant VA as voice-agent-backend
     participant CT as Deepgram
     participant BS as backend-services
     participant DB as Supabase
 
-    Caller->>LK: WebRTC / SIP connect
+    alt phone (PSTN)
+        Caller->>SIP: SIP INVITE
+        SIP->>LK: bridge call into room (SIP participant)
+    else WebRTC client
+        Caller->>LK: WebRTC connect
+    end
     LK->>VA: dispatch → my_agent(ctx)
 
     VA->>BS: BackendClient.health_check()<br/>GET /health/
@@ -80,7 +87,7 @@ The per-utterance loop. The LLM either replies directly (happy path shown here) 
 ```mermaid
 sequenceDiagram
     actor Caller
-    participant LK as LiveKit Cloud
+    participant LK as LiveKit SFU (self-hosted)
     participant VA as voice-agent-backend
     participant DG as Deepgram
     participant GR as Gemini
@@ -211,10 +218,16 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     actor Caller
-    participant LK as LiveKit Cloud
+    participant SIP as LiveKit SIP server
+    participant LK as LiveKit SFU (self-hosted)
     participant VA as voice-agent-backend
 
-    Caller->>LK: hangup
+    alt phone (PSTN)
+        Caller->>SIP: hangup (BYE)
+        SIP->>LK: end SIP participant
+    else WebRTC client
+        Caller->>LK: hangup
+    end
     LK->>VA: room disconnect
     VA->>VA: BackendClient.aclose()<br/>(httpx pool teardown)
     Note right of VA: ⚠ no drain of in-flight<br/>fire-and-forget log_event tasks
@@ -226,7 +239,8 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     actor Caller
-    participant LK as LiveKit Cloud
+    participant SIP as LiveKit SIP server
+    participant LK as LiveKit SFU (self-hosted)
     participant VA as voice-agent-backend
     participant DG as Deepgram
     participant GR as Gemini
@@ -241,7 +255,12 @@ sequenceDiagram
 
     rect rgb(230, 240, 255)
     Note over Caller,DB: Session start (per call)
-    Caller->>LK: WebRTC / SIP connect
+    alt phone (PSTN)
+        Caller->>SIP: SIP INVITE
+        SIP->>LK: bridge call into room (SIP participant)
+    else WebRTC client
+        Caller->>LK: WebRTC connect
+    end
     LK->>VA: dispatch → my_agent(ctx)
 
     VA->>BS: BackendClient.health_check()<br/>GET /health/
@@ -348,7 +367,12 @@ sequenceDiagram
 
     rect rgb(255, 230, 230)
     Note over Caller,DB: Session end
-    Caller->>LK: hangup
+    alt phone (PSTN)
+        Caller->>SIP: hangup (BYE)
+        SIP->>LK: end SIP participant
+    else WebRTC client
+        Caller->>LK: hangup
+    end
     LK->>VA: room disconnect
     VA->>VA: BackendClient.aclose()<br/>(httpx pool teardown)
     end
