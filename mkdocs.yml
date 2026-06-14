@@ -97,3 +97,7 @@ nav:
       - ADR-006 LiveKit over LangGraph: decisions/006-livekit-over-langgraph.md
   - Scope: scope.md
   - Evaluation: evaluation.md
+  - Testing:
+      - Conversational Test Cases: testing/index.md
+      - Public Test Cases: testing/public-test-cases.md
+      - Private Test Cases: testing/private-test-cases.md
