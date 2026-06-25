@@ -57,6 +57,9 @@ sequenceDiagram
         Caller->>LK: WebRTC connect
     end
     LK->>VA: dispatch → my_agent(ctx)
+    VA->>LK: ctx.connect() (≤8s)
+    LK-->>VA: ctx.wait_for_participant() resolves (≤30s)
+    Note right of VA: don't bootstrap until the caller is in the room —<br/>guards against the leading greeting frames being clipped<br/>before the client subscribes to the agent track
 
     VA->>BS: BackendClient.health_check()<br/>GET /health/
     BS-->>VA: 200 {status: healthy}
@@ -65,7 +68,7 @@ sequenceDiagram
     BS->>DB: agent_core.fetch_menu(...)<br/>SELECT stores + menu_categories + menu_items<br/>+ modifier_groups + modifiers
     DB-->>BS: rows
     BS-->>VA: 201 MenuRead
-    Note right of VA: format_categories → Tier-1 (category names) in system prompt
+    Note right of VA: format_compact_menu → Tier-1 (full menu:<br/>item names + base prices) in system prompt
 
     VA->>BS: BackendClient.start_call(...)<br/>POST /agent/calls
     BS->>DB: INSERT INTO calls (status='active')
@@ -77,7 +80,7 @@ sequenceDiagram
     VA->>CT: TTS greeting
     CT-->>VA: audio
     VA-->>LK: stream
-    LK-->>Caller: "Hello, thank you for calling…"
+    LK-->>Caller: "Hi there, thanks for calling…"
 ```
 
 ### 3. One conversational turn — speech in, speech out
@@ -97,7 +100,7 @@ sequenceDiagram
     LK->>VA: PCM frames
     VA->>DG: streaming STT (nova-3)
     DG-->>VA: transcript
-    VA->>GR: chat.completions (gemini-3.1-flash-lite)<br/>system + Tier-1 menu + history + tools
+    VA->>GR: chat.completions (gemini-3.1-flash-lite)<br/>system + Tier-1 compact menu + history + tools
     alt direct reply
         GR-->>VA: assistant message
     else tool call
@@ -147,7 +150,7 @@ sequenceDiagram
 
 ### 6. Tool: cart mutation — `add_item` / `remove_item` / `modify_item`
 
-The customer is editing the order. Cart state lives in `OrderState` (in-memory); every edit fires a fire-and-forget `call_events` insert so the dashboard / analytics can replay the call.
+The customer is editing the order. Cart state lives in `OrderState` (in-memory); every edit fires a fire-and-forget `call_events` insert so the dashboard / analytics can replay the call. Non-success returns (`off_menu`, `ambiguous`, `not_in_order`, or an `added`/`modified` result carrying `unknown_modifiers`) include an `agent_action` string instructing the agent how to recover — offer alternatives, read candidates back, or ask the caller to pick a supported modifier.
 
 ```mermaid
 sequenceDiagram
@@ -166,7 +169,7 @@ sequenceDiagram
 
 ### 7. Tool: `confirm_order` — finalize and persist
 
-The only point in the call where the cart actually becomes durable. Synchronous (the agent waits) because the customer needs to hear an order ID or a failure. Per cart line and per modifier we resolve back to the canonical row to validate prices and IDs.
+The only point in the call where the cart actually becomes durable. Synchronous (the agent waits) because the customer needs to hear an order ID or a failure. Before any POST, `confirm_order` runs local validation gates and bounces back (no POST) if any fails — each carries an `agent_action` telling the agent how to recover. Per cart line and per modifier we then resolve back to the canonical row to validate prices and IDs.
 
 ```mermaid
 sequenceDiagram
@@ -176,6 +179,7 @@ sequenceDiagram
     participant DB as Supabase
 
     GR-->>VA: tool_call confirm_order(order_type, address, phone, special_instructions)
+    Note right of VA: validate before POST (each returns an agent_action):<br/>empty cart → empty · delivery w/o address → need_address<br/>missing phone → need_phone · digit count outside 10–15 → invalid_phone
     VA->>BS: BackendClient.create_order(payload)<br/>POST /agent/orders
     BS->>DB: SELECT FROM calls WHERE id=:call_id
     BS->>DB: SELECT FROM stores WHERE id=:store_id
@@ -262,6 +266,9 @@ sequenceDiagram
         Caller->>LK: WebRTC connect
     end
     LK->>VA: dispatch → my_agent(ctx)
+    VA->>LK: ctx.connect() (≤8s)
+    LK-->>VA: ctx.wait_for_participant() resolves (≤30s)
+    Note right of VA: wait for the caller before bootstrapping so the<br/>opening greeting isn't clipped while the client<br/>subscribes to the agent track
 
     VA->>BS: BackendClient.health_check()<br/>GET /health/
     BS-->>VA: 200 {status: healthy}
@@ -276,7 +283,7 @@ sequenceDiagram
     BS->>DB: SELECT * FROM modifier_groups<br/>JOIN modifier_group_items<br/>+ selectinload(modifiers)
     DB-->>BS: groups + modifiers
     BS-->>VA: 201 MenuRead
-    Note right of VA: menu.lookup.format_categories(menu)<br/>→ Tier-1 (category names) in system prompt
+    Note right of VA: menu.lookup.format_compact_menu(menu)<br/>→ Tier-1 (full menu: item names + base prices)<br/>in system prompt
 
     VA->>BS: BackendClient.start_call(store_id, sid, phone)<br/>POST /agent/calls
     BS->>BS: agent_tools.post_call()<br/>→ agent_core.create_call(db, payload)
@@ -286,7 +293,7 @@ sequenceDiagram
 
     VA->>VA: OrderState(menu, store_id, call_id, sink=BackendSink)
     VA->>LK: AgentSession.start()<br/>Assistant.on_enter()
-    VA->>CT: TTS "Hello, thank you for calling…"
+    VA->>CT: TTS "Hi there, thanks for calling…"
     CT-->>VA: audio frames
     VA-->>LK: stream
     LK-->>Caller: greeting
@@ -298,7 +305,7 @@ sequenceDiagram
     LK->>VA: PCM frames
     VA->>DG: streaming STT (nova-3)
     DG-->>VA: transcript
-    VA->>GR: google.LLM.chat (gemini-3.1-flash-lite)<br/>system+history+Tier-1 menu+tools
+    VA->>GR: google.LLM.chat (gemini-3.1-flash-lite)<br/>system+history+Tier-1 compact menu+tools
     GR-->>VA: assistant msg OR tool_call
     end
 
@@ -328,6 +335,7 @@ sequenceDiagram
         VA-->>GR: tool result {items[], total}
 
     else confirm_order(order_type, address, phone, instructions)
+        Note right of VA: pre-POST gates (each bounces back with an agent_action):<br/>empty cart→empty · delivery w/o address→need_address<br/>missing phone→need_phone · bad digit count→invalid_phone
         VA->>BS: BackendClient.create_order(payload)<br/>POST /agent/orders
         BS->>BS: agent_tools.post_order()<br/>→ agent_core.create_order(db, payload)
         BS->>DB: SELECT * FROM calls WHERE id=:call_id

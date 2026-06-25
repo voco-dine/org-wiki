@@ -12,6 +12,16 @@ Every call opens with the fixed greeting:
 
 The greeting is omitted from the scripts below for brevity — assume it is turn 0.
 
+!!! warning "Deferred while modifiers & handoff are out of scope"
+    Item **modifiers** (size, toppings, proteins) and **human handoff** are currently out of scope
+    (tracked in voice-agent-backend
+    [#9](https://github.com/voco-dine/voice-agent-backend/issues/9) and
+    [#10](https://github.com/voco-dine/voice-agent-backend/issues/10)). The cases that demo them —
+    **PUB-03**, **PUB-04** (modifiers) and **PUB-10** (handoff) — are kept below for when those
+    features land but are marked **DEFERRED**; don't run them in the current suite. Also, browsing is
+    now answered from the **grounded in-context menu** (the prompt embeds the full menu) rather than a
+    `get_category_items` call — see PUB-02.
+
 ---
 
 ## PUB-01 — Single item, direct add, pickup
@@ -42,7 +52,7 @@ The greeting is omitted from the scripts below for brevity — assume it is turn
 
 ## PUB-02 — Browse a category, then order
 
-**Goal:** Tier-2 browsing — the agent reads one category at a time, never the whole menu.
+**Goal:** Browsing — the agent reads one category at a time from the grounded menu, never the whole menu.
 
 | # | Speaker | Utterance |
 |---|---|---|
@@ -55,16 +65,21 @@ The greeting is omitted from the scripts below for brevity — assume it is turn
 | 7 | Caller | "And a lemonade. That's all, for pickup, 0412 345 678." |
 | 8 | Agent | Reads back both items + total $27.98, confirms pickup, places order. |
 
-**Expected tool calls:** `get_category_items("Mains")` → `add_item("salmon")` →
-`add_item("lemonade")` → `confirm_order(order_type="pickup", customer_phone=...)`.
+**Expected tool calls:** `add_item("salmon")` → `add_item("lemonade")` →
+`confirm_order(order_type="pickup", customer_phone=...)`. The agent reads the Mains items **from the
+grounded in-context menu** (the prompt now embeds the full menu with prices), so a
+`get_category_items` call is no longer required — it may still call it, but the read-back must come
+from real menu data either way.
 
-- ✅ Turn 2 names **categories only** — does not recite items (Tier-1 discipline).
+- ✅ Turn 4 reads back the **real Mains items with prices** — no invented dishes (this is the regression guard for the hallucinated-menu bug).
 - ✅ "salmon" resolves to **Grilled Salmon** (single substring match), not the Salmon protein modifier.
 - ✅ DB order total `27.98` (22.99 + 4.99), two `order_items`.
 
 ---
 
 ## PUB-03 — Pizza with size and a topping
+
+> **⚠️ DEFERRED — modifiers out of scope.** Restore when [voice-agent-backend#9](https://github.com/voco-dine/voice-agent-backend/issues/9) lands. The prompt no longer solicits size/toppings.
 
 **Goal:** Required single-select size + an optional topping resolve correctly, and the price reflects the deltas.
 
@@ -85,6 +100,8 @@ The greeting is omitted from the scripts below for brevity — assume it is turn
 ---
 
 ## PUB-04 — Caesar Salad with a protein
+
+> **⚠️ DEFERRED — modifiers out of scope.** Restore when [voice-agent-backend#9](https://github.com/voco-dine/voice-agent-backend/issues/9) lands. The prompt no longer solicits size/proteins.
 
 **Goal:** The other modifier-bearing item; multi-select optional protein.
 
@@ -199,6 +216,8 @@ The greeting is omitted from the scripts below for brevity — assume it is turn
 
 ## PUB-10 — Polite human handoff
 
+> **⚠️ DEFERRED — handoff out of scope.** Restore when [voice-agent-backend#10](https://github.com/voco-dine/voice-agent-backend/issues/10) lands. The prompt no longer instructs the agent to escalate, so it won't reliably hand off today.
+
 **Goal:** The caller asks for a person; the agent escalates gracefully.
 
 | # | Speaker | Utterance |
@@ -225,10 +244,10 @@ The greeting is omitted from the scripts below for brevity — assume it is turn
 | 3 | Caller | "Okay, a Margherita then, small. Pickup, 0433 444 555." |
 
 **Expected tool calls:** `add_item("cheeseburger")` → returns `status="off_menu"` →
-(agent declines) → `add_item("Margherita", modifiers=["small"])` → `confirm_order(...)`.
+(agent declines) → `add_item("Margherita")` → `confirm_order(...)`.
 
 - ✅ Agent does **not** invent a burger, a price, or a substitute it can't sell.
-- ✅ Recovers into a valid order (10" Small Margherita, $14.99).
+- ✅ Recovers into a valid order (Margherita Pizza, $14.99 base — size is out of scope for now).
 
 ---
 
@@ -244,7 +263,7 @@ The greeting is omitted from the scripts below for brevity — assume it is turn
 | 4 | Agent | Tiramisu has no nuts listed (Gluten, Dairy, Eggs); offers it. |
 | 5 | Caller | "One Tiramisu, pickup, 0444 555 666." |
 
-**Expected tool calls:** `get_item_details("Baklava")` → `get_category_items("Sweets")` / `get_item_details("Tiramisu")` → `add_item("Tiramisu")` → `confirm_order(...)`.
+**Expected tool calls:** `get_item_details("Baklava")` → `get_item_details("Tiramisu")` → `add_item("Tiramisu")` → `confirm_order(...)`. Allergens are **not** in the grounded menu (names + prices only), so `get_item_details` is still required here; the sweets list itself can be read from the grounded menu.
 
 - ✅ Allergen facts match the snapshot exactly.
 - ✅ Agent states only the listed allergens; it does not claim the kitchen is nut-free or give medical/cross-contamination guarantees. (Deeper allergy probing is covered in the private suite.)
