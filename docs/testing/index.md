@@ -66,8 +66,9 @@ See the [sequence diagram](../system-specification/sequence.md) for what each to
 These are facts about the running code that the cases assert against:
 
 - **Greeting is fixed and proactive.** The agent opens every call with
-  *"Hello, thank you for calling Vocodine Restaurant! I'm your voice ordering assistant. What can I
-  get for you today?"* (`Assistant.on_enter`).
+  *"Hi there, thanks for calling Vocodine Restaurant! What can I get for you?"* (`Assistant.on_enter`).
+  The agent only speaks once a participant is in the room (`wait_for_participant` before bootstrap), so
+  the opening line isn't clipped while the client subscribes to the agent track.
 - **The server computes totals.** The agent reads back a running total from the in-memory cart, but
   `POST /agent/orders` recomputes `total_amount` and sets `status='pending'` server-side. Treat the
   DB total as authoritative.
@@ -80,6 +81,15 @@ These are facts about the running code that the cases assert against:
 - **Delivery requires an address.** `confirm_order(order_type="delivery")` without an address
   returns `need_address` and does **not** POST. The address must go in the `address` field, never in
   `special_instructions`.
+- **Every order requires a valid phone number.** `confirm_order` returns `need_phone` when no number
+  is given and `invalid_phone` when the digit count is implausible (outside 10–15, e.g. a transcription
+  that dropped all but the last 4 digits) — neither POSTs. `normalize_phone` (`cart/state.py`) only
+  checks the digit count and preserves the caller's formatting; `invalid_phone` echoes back what was
+  heard in `phone_heard` so the agent can read it out and re-ask.
+- **Tool failures carry an `agent_action`.** Every non-success tool result (`off_menu`, `ambiguous`,
+  `not_in_order`, `need_address`, `need_phone`, `invalid_phone`, `unknown_modifiers`, …) includes a
+  plain-language `agent_action` string telling the agent how to recover. It is guidance for the model,
+  not a line to read aloud verbatim.
 - **There is no upselling step.** The agent should not push add-ons unprompted.
 - **No multi-language support** (English only — see [Scope](../scope.md)).
 
